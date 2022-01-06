@@ -164,7 +164,8 @@ fn build_simple_with_exporter(
         provider_builder = provider_builder.with_config(config);
     }
     let provider = provider_builder.build();
-    let tracer = provider.tracer("opentelemetry-otlp", Some(env!("CARGO_PKG_VERSION")));
+    let tracer =
+        provider.versioned_tracer("opentelemetry-otlp", Some(env!("CARGO_PKG_VERSION")), None);
     let _ = global::set_tracer_provider(provider);
     tracer
 }
@@ -180,13 +181,17 @@ fn build_batch_with_exporter<R: TraceRuntime>(
         provider_builder = provider_builder.with_config(config);
     }
     let provider = provider_builder.build();
-    let tracer = provider.tracer("opentelemetry-otlp", Some(env!("CARGO_PKG_VERSION")));
+    let tracer =
+        provider.versioned_tracer("opentelemetry-otlp", Some(env!("CARGO_PKG_VERSION")), None);
     let _ = global::set_tracer_provider(provider);
     tracer
 }
 
 /// OTLP span exporter builder.
 #[derive(Debug)]
+// This enum only used during initialization stage of application. The overhead should be OK.
+// Users can also disable the unused features to make the overhead on object size smaller.
+#[allow(clippy::large_enum_variant)]
 #[non_exhaustive]
 pub enum SpanExporterBuilder {
     /// Tonic span exporter builder

@@ -44,7 +44,7 @@ use std::collections::HashSet;
 ///
 /// // And a given span
 /// let example_span = sdktrace::TracerProvider::default()
-///     .tracer("example-component", None)
+///     .tracer("example-component")
 ///     .start("span-name");
 ///
 /// // with the current context, call inject to add the headers
@@ -143,9 +143,9 @@ mod tests {
             injector.set(
                 "testheader",
                 format!(
-                    "{}-{}-{:02x}",
-                    span_context.trace_id().to_u128(),
-                    span_context.span_id().to_u64(),
+                    "{:x}-{:x}-{:02x}",
+                    span_context.trace_id(),
+                    span_context.span_id(),
                     span_context.trace_flags()
                 ),
             )

@@ -7,7 +7,7 @@ use crate::{
         trace::{Config, EvictedHashMap, EvictedQueue},
         InstrumentationLibrary,
     },
-    trace::{Span, SpanContext, SpanId, SpanKind, StatusCode},
+    trace::{Span, SpanContext, SpanId, SpanKind, StatusCode, TraceId},
     KeyValue,
 };
 use async_trait::async_trait;
@@ -48,7 +48,7 @@ pub fn new_test_export_span_data() -> SpanData {
     let config = Config::default();
     SpanData {
         span_context: SpanContext::empty_context(),
-        parent_span_id: SpanId::from_u64(0),
+        parent_span_id: SpanId::INVALID,
         span_kind: SpanKind::Internal,
         name: "opentelemetry".into(),
         start_time: crate::time::now(),
@@ -157,5 +157,19 @@ impl<T> From<tokio::sync::mpsc::error::SendError<T>> for TestExportError {
 impl<T> From<std::sync::mpsc::SendError<T>> for TestExportError {
     fn from(err: std::sync::mpsc::SendError<T>) -> Self {
         TestExportError(err.to_string())
+    }
+}
+
+// Helper to create trace ids for testing
+impl TraceId {
+    pub fn from_u128(num: u128) -> Self {
+        TraceId(num)
+    }
+}
+
+// Helper to create span ids for testing
+impl SpanId {
+    pub fn from_u64(num: u64) -> Self {
+        SpanId(num)
     }
 }

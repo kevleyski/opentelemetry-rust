@@ -31,7 +31,12 @@ impl trace::TracerProvider for NoopTracerProvider {
     type Tracer = NoopTracer;
 
     /// Returns a new `NoopTracer` instance.
-    fn tracer(&self, _name: &'static str, _version: Option<&'static str>) -> Self::Tracer {
+    fn versioned_tracer(
+        &self,
+        _name: impl Into<Cow<'static, str>>,
+        _version: Option<&'static str>,
+        _schema_url: Option<&'static str>,
+    ) -> Self::Tracer {
         NoopTracer::new()
     }
 
@@ -58,8 +63,8 @@ impl NoopSpan {
     pub fn new() -> Self {
         NoopSpan {
             span_context: trace::SpanContext::new(
-                trace::TraceId::invalid(),
-                trace::SpanId::invalid(),
+                trace::TraceId::INVALID,
+                trace::SpanId::INVALID,
                 TraceFlags::default(),
                 false,
                 TraceState::default(),
@@ -139,19 +144,14 @@ impl NoopTracer {
 impl trace::Tracer for NoopTracer {
     type Span = NoopSpan;
 
-    /// Returns a `NoopSpan` as they are always invalid.
-    fn invalid(&self) -> Self::Span {
-        NoopSpan::new()
-    }
-
     /// Starts a new `NoopSpan` with a given context.
     ///
     /// If the context contains a valid span, it's span context is propagated.
-    fn start_with_context<T>(&self, name: T, cx: Context) -> Self::Span
+    fn start_with_context<T>(&self, name: T, parent_cx: &Context) -> Self::Span
     where
         T: Into<std::borrow::Cow<'static, str>>,
     {
-        self.build(SpanBuilder::from_name_with_context(name, cx))
+        self.build_with_context(SpanBuilder::from_name(name), parent_cx)
     }
 
     /// Starts a `SpanBuilder`.
@@ -166,14 +166,13 @@ impl trace::Tracer for NoopTracer {
     ///
     /// If the span builder or the context's current span contains a valid span context, it is
     /// propagated.
-    fn build(&self, builder: trace::SpanBuilder) -> Self::Span {
-        let cx = builder.parent_context;
-        if cx.has_active_span() {
+    fn build_with_context(&self, _builder: trace::SpanBuilder, parent_cx: &Context) -> Self::Span {
+        if parent_cx.has_active_span() {
             NoopSpan {
-                span_context: cx.span().span_context().clone(),
+                span_context: parent_cx.span().span_context().clone(),
             }
         } else {
-            self.invalid()
+            NoopSpan::new()
         }
     }
 }
@@ -219,17 +218,18 @@ mod tests {
     #[test]
     fn noop_tracer_defaults_to_invalid_span() {
         let tracer = NoopTracer::new();
-        let span = tracer.start_with_context("foo", Context::new());
+        let span = tracer.start_with_context("foo", &Context::new());
         assert!(!span.span_context().is_valid());
     }
 
     #[test]
     fn noop_tracer_propagates_valid_span_context_from_builder() {
         let tracer = NoopTracer::new();
-        let builder = tracer
-            .span_builder("foo")
-            .with_parent_context(Context::new().with_span(TestSpan(valid_span_context())));
-        let span = tracer.build(builder);
+        let builder = tracer.span_builder("foo");
+        let span = tracer.build_with_context(
+            builder,
+            &Context::new().with_span(TestSpan(valid_span_context())),
+        );
         assert!(span.span_context().is_valid());
     }
 
@@ -239,7 +239,7 @@ mod tests {
         let cx = Context::new().with_span(NoopSpan {
             span_context: valid_span_context(),
         });
-        let span = tracer.start_with_context("foo", cx);
+        let span = tracer.start_with_context("foo", &cx);
         assert!(span.span_context().is_valid());
     }
 
@@ -247,7 +247,7 @@ mod tests {
     fn noop_tracer_propagates_valid_span_context_from_remote_span_context() {
         let tracer = NoopTracer::new();
         let cx = Context::new().with_remote_span_context(valid_span_context());
-        let span = tracer.start_with_context("foo", cx);
+        let span = tracer.start_with_context("foo", &cx);
         assert!(span.span_context().is_valid());
     }
 }

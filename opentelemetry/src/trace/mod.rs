@@ -45,7 +45,11 @@
 //!     let tracer_provider = global::tracer_provider();
 //!
 //!     // Get a tracer for this library
-//!     let tracer = tracer_provider.tracer("my_name", Some(env!("CARGO_PKG_VERSION")));
+//!     let tracer = tracer_provider.versioned_tracer(
+//!         "my_name",
+//!         Some(env!("CARGO_PKG_VERSION")),
+//!         None
+//!     );
 //!
 //!     // Create spans
 //!     let mut span = tracer.start("doing_work");
@@ -168,7 +172,7 @@
 //! # }
 //! ```
 
-use ::futures::channel::{mpsc::TrySendError, oneshot::Canceled};
+use futures_channel::{mpsc::TrySendError, oneshot::Canceled};
 #[cfg(feature = "serialize")]
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;

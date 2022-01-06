@@ -169,7 +169,11 @@ impl DatadogPipelineBuilder {
             sdk::trace::TracerProvider::builder().with_simple_exporter(exporter);
         provider_builder = provider_builder.with_config(config);
         let provider = provider_builder.build();
-        let tracer = provider.tracer("opentelemetry-datadog", Some(env!("CARGO_PKG_VERSION")));
+        let tracer = provider.versioned_tracer(
+            "opentelemetry-datadog",
+            Some(env!("CARGO_PKG_VERSION")),
+            None,
+        );
         let _ = global::set_tracer_provider(provider);
         Ok(tracer)
     }
@@ -186,7 +190,11 @@ impl DatadogPipelineBuilder {
             sdk::trace::TracerProvider::builder().with_batch_exporter(exporter, runtime);
         provider_builder = provider_builder.with_config(config);
         let provider = provider_builder.build();
-        let tracer = provider.tracer("opentelemetry-datadog", Some(env!("CARGO_PKG_VERSION")));
+        let tracer = provider.versioned_tracer(
+            "opentelemetry-datadog",
+            Some(env!("CARGO_PKG_VERSION")),
+            None,
+        );
         let _ = global::set_tracer_provider(provider);
         Ok(tracer)
     }
@@ -269,7 +277,7 @@ mod tests {
 
         let mut traces = group_into_traces(batch);
         // We need to sort the output in order to compare, but this is not required by the Datadog agent
-        traces.sort_by_key(|t| t[0].span_context.trace_id().to_u128());
+        traces.sort_by_key(|t| u128::from_be_bytes(t[0].span_context.trace_id().to_bytes()));
 
         assert_eq!(traces, expected);
     }

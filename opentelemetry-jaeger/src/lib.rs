@@ -106,6 +106,32 @@
 //!     Ok(())
 //! }
 //! ```
+//! ## Resource, tags and service name
+//! In order to export the spans in different format. opentelemetry uses its own
+//! model internally. Most of the jaeger spans' concept can be found in this model.
+//! The full list of this mapping can be found in [OpenTelemetry to Jaeger Transformation].
+//!
+//! The **process tags** in jaeger spans will be mapped as resource in opentelemetry. You can
+//! set it through `OTEL_RESOURCE_ATTRIBUTES` environment variable or using [`PipelineBuilder::with_trace_config`].
+//!
+//! Note that to avoid copying data multiple times. Jaeger exporter will uses resource stored in [`Exporter`].
+//!
+//! The **tags** in jaeger spans will be mapped as attributes in opentelemetry spans. You can
+//! set it through [`set_attribute`] method.
+//!
+//! Each jaeger span requires a **service name**. This will be mapped as a resource with `service.name` key.
+//! You can set it using one of the following methods from highest priority to lowest priority.
+//! 1. [`PipelineBuilder::with_service_name`].
+//! 2. include a `service.name` key value pairs when configure resource using [`PipelineBuilder::with_trace_config`].
+//! 3. set the service name as `OTEL_SERVCE_NAME` environment variable.
+//! 4. set the `service.name` attributes in `OTEL_RESOURCE_ATTRIBUTES`.
+//! 5. if the service name is not provided by the above method. `unknown_service` will be used.
+//!
+//! Based on the service name, we update/append the `service.name` process tags in jaeger spans.
+//!
+//! [`set_attribute`]: https://docs.rs/opentelemetry/0.16.0/opentelemetry/trace/trait.Span.html#tymethod.set_attribute
+//!
+//! [OpenTelemetry to Jaeger Transformation]:https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/trace/sdk_exporters/jaeger.md
 //!
 //! ## Kitchen Sink Full Configuration
 //!
@@ -123,7 +149,6 @@
 //!     let tracer = opentelemetry_jaeger::new_pipeline()
 //!         .with_agent_endpoint("localhost:6831")
 //!         .with_service_name("my_app")
-//!         .with_tags(vec![KeyValue::new("process_key", "process_value")])
 //!         .with_max_packet_size(9_216)
 //!         .with_trace_config(
 //!             trace::config()
@@ -132,7 +157,8 @@
 //!                 .with_max_events_per_span(64)
 //!                 .with_max_attributes_per_span(16)
 //!                 .with_max_events_per_span(16)
-//!                 .with_resource(Resource::new(vec![KeyValue::new("key", "value")])),
+//!                 .with_resource(Resource::new(vec![KeyValue::new("key", "value"),
+//!                           KeyValue::new("process_key", "process_value")])),
 //!         )
 //!         .install_batch(opentelemetry::runtime::Tokio)?;
 //!
@@ -165,12 +191,18 @@
 //! Support for recording and exporting telemetry asynchronously can be added
 //! via the following flags, it extends the [`opentelemetry`] feature:
 //!
-//! * `rt-tokio`: Enable sending UDP packets to Jaeger agent asynchronously when [`Tokio`] runtime is used.
+//! * `rt-tokio`: Enable sending UDP packets to Jaeger agent asynchronously when the tokio
+//!   [`Multi-Threaded Scheduler`] is used.
 //!
-//! * `rt-tokio-current-thread`: Enable sending UDP packets to Jaeger agent asynchronously when [`TokioCurrentThread`] runtime is used.
+//! * `rt-tokio-current-thread`: Enable sending UDP packets to Jaeger agent asynchronously when the
+//!   tokio [`Current-Thread Scheduler`] is used.
 //!
-//! * `rt-async-std`: Enable sending UDP packets to Jaeger agent asynchronously when [`AsyncStd`] runtime is used.
+//! * `rt-async-std`: Enable sending UDP packets to Jaeger agent asynchronously when the
+//!   [`async-std`] runtime is used.
 //!
+//! [`Multi-Threaded Scheduler`]: https://docs.rs/tokio/latest/tokio/runtime/index.html#multi-thread-scheduler
+//! [`Current-Thread Scheduler`]: https://docs.rs/tokio/latest/tokio/runtime/index.html#current-thread-scheduler
+//! [`async-std`]: https://async.rs
 //! [`opentelemetry`]: https://crates.io/crates/opentelemetry
 //!
 //! ## Supported Rust Versions
@@ -278,12 +310,7 @@ mod propagator {
                 return Err(());
             }
 
-            // allow variable length, padding 0 when length is less than 32
-            let padded_trace_id = format!("{:0>32}", trace_id);
-
-            u128::from_str_radix(padded_trace_id.as_str(), 16)
-                .map(TraceId::from_u128)
-                .map_err(|_| ())
+            TraceId::from_hex(trace_id).map_err(|_| ())
         }
 
         /// Extract span id from the header.
@@ -292,9 +319,7 @@ mod propagator {
                 return Err(());
             }
 
-            u64::from_str_radix(span_id, 16)
-                .map(SpanId::from_u64)
-                .map_err(|_| ())
+            SpanId::from_hex(span_id).map_err(|_| ())
         }
 
         /// Extract flag from the header
@@ -360,8 +385,8 @@ mod propagator {
                 };
                 let header_value = format!(
                     "{:032x}:{:016x}:{:01}:{:01}",
-                    span_context.trace_id().to_u128(),
-                    span_context.span_id().to_u64(),
+                    span_context.trace_id(),
+                    span_context.span_id(),
                     DEPRECATED_PARENT_SPAN,
                     flag,
                 );

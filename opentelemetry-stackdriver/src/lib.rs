@@ -3,6 +3,11 @@
 // that are interpreted as "doc tests" and will fail to build.
 // When this PR is merged we should be able to remove this attribute:
 // https://github.com/danburkert/prost/pull/291
+#![allow(
+    rustdoc::bare_urls,
+    rustdoc::broken_intra_doc_links,
+    rustdoc::invalid_rust_codeblocks
+)]
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -174,14 +179,12 @@ impl StackDriverExporter {
                             name: format!(
                                 "projects/{}/traces/{}/spans/{}",
                                 authorizer.project_id(),
-                                hex::encode(span.span_context.trace_id().to_u128().to_be_bytes()),
-                                hex::encode(span.span_context.span_id().to_u64().to_be_bytes())
+                                hex::encode(span.span_context.trace_id().to_bytes()),
+                                hex::encode(span.span_context.span_id().to_bytes())
                             ),
                             display_name: Some(to_truncate(span.name.into_owned())),
-                            span_id: hex::encode(
-                                span.span_context.span_id().to_u64().to_be_bytes(),
-                            ),
-                            parent_span_id: hex::encode(span.parent_span_id.to_u64().to_be_bytes()),
+                            span_id: hex::encode(span.span_context.span_id().to_bytes()),
+                            parent_span_id: hex::encode(span.parent_span_id.to_bytes()),
                             start_time: Some(span.start_time.into()),
                             end_time: Some(span.end_time.into()),
                             attributes: Some(Attributes {

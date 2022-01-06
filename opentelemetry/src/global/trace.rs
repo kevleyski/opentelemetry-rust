@@ -7,7 +7,7 @@ use std::mem;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
-pub trait ObjectSafeSpan: fmt::Debug {
+pub trait ObjectSafeSpan {
     /// An API to record events at a specific time in the context of a given `Span`.
     ///
     /// Events SHOULD preserve the order in which they're set. This will typically match
@@ -144,7 +144,6 @@ impl<T: trace::Span> ObjectSafeSpan for T {
 /// applications without knowing the underlying type.
 ///
 /// [`Span`]: crate::trace::Span
-#[derive(Debug)]
 pub struct BoxedSpan(Box<dyn ObjectSafeSpan + Send + Sync>);
 
 impl BoxedSpan {
@@ -153,6 +152,12 @@ impl BoxedSpan {
         T: ObjectSafeSpan + Send + Sync + 'static,
     {
         BoxedSpan(Box::new(span))
+    }
+}
+
+impl fmt::Debug for BoxedSpan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("BoxedSpan")
     }
 }
 
@@ -219,19 +224,18 @@ impl trace::Span for BoxedSpan {
 ///
 /// [`Tracer`]: crate::trace::Tracer
 /// [`GlobalTracerProvider`]: crate::global::GlobalTracerProvider
-#[derive(Debug)]
 pub struct BoxedTracer(Box<dyn ObjectSafeTracer + Send + Sync>);
+
+impl fmt::Debug for BoxedTracer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("BoxedTracer")
+    }
+}
 
 impl trace::Tracer for BoxedTracer {
     /// Global tracer uses `BoxedSpan`s so that it can be a global singleton,
     /// which is not possible if it takes generic type parameters.
     type Span = BoxedSpan;
-
-    /// Returns a span with an inactive `SpanContext`. Used by functions that
-    /// need to return a default span like `get_active_span` if no span is present.
-    fn invalid(&self) -> Self::Span {
-        BoxedSpan(self.0.invalid_boxed())
-    }
 
     /// Starts a new `Span`.
     ///
@@ -240,11 +244,11 @@ impl trace::Tracer for BoxedTracer {
     /// trace. A span is said to be a _root span_ if it does not have a parent. Each
     /// trace includes a single root span, which is the shared ancestor of all other
     /// spans in the trace.
-    fn start_with_context<T>(&self, name: T, cx: Context) -> Self::Span
+    fn start_with_context<T>(&self, name: T, parent_cx: &Context) -> Self::Span
     where
         T: Into<Cow<'static, str>>,
     {
-        BoxedSpan(self.0.start_with_context_boxed(name.into(), cx))
+        BoxedSpan(self.0.start_with_context_boxed(name.into(), parent_cx))
     }
 
     /// Creates a span builder
@@ -258,8 +262,8 @@ impl trace::Tracer for BoxedTracer {
     }
 
     /// Create a span from a `SpanBuilder`
-    fn build(&self, builder: trace::SpanBuilder) -> Self::Span {
-        BoxedSpan(self.0.build_boxed(builder))
+    fn build_with_context(&self, builder: trace::SpanBuilder, parent_cx: &Context) -> Self::Span {
+        BoxedSpan(self.0.build_with_context_boxed(builder, parent_cx))
     }
 }
 
@@ -267,21 +271,22 @@ impl trace::Tracer for BoxedTracer {
 /// instances by mirroring the interface and boxing the return types.
 ///
 /// [`Tracer`]: crate::trace::Tracer
-pub trait ObjectSafeTracer: fmt::Debug + 'static {
-    /// Create a new invalid span for use in cases where there are no active spans.
-    fn invalid_boxed(&self) -> Box<dyn ObjectSafeSpan + Send + Sync>;
-
+pub trait ObjectSafeTracer {
     /// Returns a trait object so the underlying implementation can be swapped
     /// out at runtime.
     fn start_with_context_boxed(
         &self,
         name: Cow<'static, str>,
-        cx: Context,
+        parent_cx: &Context,
     ) -> Box<dyn ObjectSafeSpan + Send + Sync>;
 
     /// Returns a trait object so the underlying implementation can be swapped
     /// out at runtime.
-    fn build_boxed(&self, builder: trace::SpanBuilder) -> Box<dyn ObjectSafeSpan + Send + Sync>;
+    fn build_with_context_boxed(
+        &self,
+        builder: trace::SpanBuilder,
+        parent_cx: &Context,
+    ) -> Box<dyn ObjectSafeSpan + Send + Sync>;
 }
 
 impl<S, T> ObjectSafeTracer for T
@@ -289,25 +294,24 @@ where
     S: trace::Span + Send + Sync + 'static,
     T: trace::Tracer<Span = S>,
 {
-    /// Create a new invalid span for use in cases where there are no active spans.
-    fn invalid_boxed(&self) -> Box<dyn ObjectSafeSpan + Send + Sync> {
-        Box::new(self.invalid())
-    }
-
     /// Returns a trait object so the underlying implementation can be swapped
     /// out at runtime.
     fn start_with_context_boxed(
         &self,
         name: Cow<'static, str>,
-        cx: Context,
+        parent_cx: &Context,
     ) -> Box<dyn ObjectSafeSpan + Send + Sync> {
-        Box::new(self.start_with_context(name, cx))
+        Box::new(self.start_with_context(name, parent_cx))
     }
 
     /// Returns a trait object so the underlying implementation can be swapped
     /// out at runtime.
-    fn build_boxed(&self, builder: trace::SpanBuilder) -> Box<dyn ObjectSafeSpan + Send + Sync> {
-        Box::new(self.build(builder))
+    fn build_with_context_boxed(
+        &self,
+        builder: trace::SpanBuilder,
+        parent_cx: &Context,
+    ) -> Box<dyn ObjectSafeSpan + Send + Sync> {
+        Box::new(self.build_with_context(builder, parent_cx))
     }
 }
 
@@ -316,12 +320,14 @@ where
 ///
 /// [`TracerProvider`]: crate::trace::TracerProvider
 /// [`GlobalTracerProvider`]: crate::global::GlobalTracerProvider
-pub trait ObjectSafeTracerProvider: fmt::Debug + 'static {
-    /// Creates a named tracer instance that is a trait object through the underlying `TracerProvider`.
-    fn tracer_boxed(
+pub trait ObjectSafeTracerProvider {
+    /// Creates a versioned named tracer instance that is a trait object through the underlying
+    /// `TracerProvider`.
+    fn versioned_tracer_boxed(
         &self,
-        name: &'static str,
+        name: Cow<'static, str>,
         version: Option<&'static str>,
+        schema_url: Option<&'static str>,
     ) -> Box<dyn ObjectSafeTracer + Send + Sync>;
 
     /// Force flush all remaining spans in span processors and return results.
@@ -331,16 +337,17 @@ pub trait ObjectSafeTracerProvider: fmt::Debug + 'static {
 impl<S, T, P> ObjectSafeTracerProvider for P
 where
     S: trace::Span + Send + Sync + 'static,
-    T: trace::Tracer<Span = S> + Send + Sync,
+    T: trace::Tracer<Span = S> + Send + Sync + 'static,
     P: trace::TracerProvider<Tracer = T>,
 {
-    /// Return a boxed tracer
-    fn tracer_boxed(
+    /// Return a versioned boxed tracer
+    fn versioned_tracer_boxed(
         &self,
-        name: &'static str,
+        name: Cow<'static, str>,
         version: Option<&'static str>,
+        schema_url: Option<&'static str>,
     ) -> Box<dyn ObjectSafeTracer + Send + Sync> {
-        Box::new(self.tracer(name, version))
+        Box::new(self.versioned_tracer(name, version, schema_url))
     }
 
     fn force_flush(&self) -> Vec<TraceResult<()>> {
@@ -353,9 +360,15 @@ where
 /// [`BoxedTracer`] instances.
 ///
 /// [`TracerProvider`]: crate::trace::TracerProvider
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GlobalTracerProvider {
     provider: Arc<dyn ObjectSafeTracerProvider + Send + Sync>,
+}
+
+impl fmt::Debug for GlobalTracerProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("GlobalTracerProvider")
+    }
 }
 
 impl GlobalTracerProvider {
@@ -363,8 +376,8 @@ impl GlobalTracerProvider {
     fn new<P, T, S>(provider: P) -> Self
     where
         S: trace::Span + Send + Sync + 'static,
-        T: trace::Tracer<Span = S> + Send + Sync,
-        P: trace::TracerProvider<Tracer = T> + Send + Sync,
+        T: trace::Tracer<Span = S> + Send + Sync + 'static,
+        P: trace::TracerProvider<Tracer = T> + Send + Sync + 'static,
     {
         GlobalTracerProvider {
             provider: Arc::new(provider),
@@ -375,9 +388,17 @@ impl GlobalTracerProvider {
 impl trace::TracerProvider for GlobalTracerProvider {
     type Tracer = BoxedTracer;
 
-    /// Find or create a named tracer using the global provider.
-    fn tracer(&self, name: &'static str, version: Option<&'static str>) -> Self::Tracer {
-        BoxedTracer(self.provider.tracer_boxed(name, version))
+    /// Create a versioned tracer using the global provider.
+    fn versioned_tracer(
+        &self,
+        name: impl Into<Cow<'static, str>>,
+        version: Option<&'static str>,
+        schema_url: Option<&'static str>,
+    ) -> Self::Tracer {
+        BoxedTracer(
+            self.provider
+                .versioned_tracer_boxed(name.into(), version, schema_url),
+        )
     }
 
     /// Force flush all remaining spans in span processors and return results.
@@ -407,21 +428,11 @@ pub fn tracer_provider() -> GlobalTracerProvider {
 ///
 /// If the name is an empty string, the provider will use a default name.
 ///
-/// This is a more convenient way of expressing `global::tracer_provider().tracer(name, None)`.
+/// This is a more convenient way of expressing `global::tracer_provider().tracer(name)`.
 ///
 /// [`Tracer`]: crate::trace::Tracer
-pub fn tracer(name: &'static str) -> BoxedTracer {
-    tracer_provider().tracer(name, None)
-}
-
-/// Creates a named instance of [`Tracer`] with version info via the configured [`GlobalTracerProvider`]
-///
-/// If the name is an empty string, the provider will use a default name.
-/// If the version is an empty string, it will be used as part of instrumentation library information.
-///
-/// [`Tracer`]: crate::trace::Tracer
-pub fn tracer_with_version(name: &'static str, version: &'static str) -> BoxedTracer {
-    tracer_provider().tracer(name, Some(version))
+pub fn tracer(name: impl Into<Cow<'static, str>>) -> BoxedTracer {
+    tracer_provider().tracer(name.into())
 }
 
 /// Sets the given [`TracerProvider`] instance as the current global provider.
@@ -433,8 +444,8 @@ pub fn tracer_with_version(name: &'static str, version: &'static str) -> BoxedTr
 pub fn set_tracer_provider<P, T, S>(new_provider: P) -> GlobalTracerProvider
 where
     S: trace::Span + Send + Sync + 'static,
-    T: trace::Tracer<Span = S> + Send + Sync,
-    P: trace::TracerProvider<Tracer = T> + Send + Sync,
+    T: trace::Tracer<Span = S> + Send + Sync + 'static,
+    P: trace::TracerProvider<Tracer = T> + Send + Sync + 'static,
 {
     let mut tracer_provider = GLOBAL_TRACER_PROVIDER
         .write()
@@ -486,16 +497,9 @@ mod tests {
     use crate::runtime;
     #[cfg(any(feature = "rt-tokio", feature = "rt-tokio-current-thread"))]
     use crate::sdk::trace::TraceRuntime;
-    use crate::trace::noop::NoopTracer;
     #[cfg(any(feature = "rt-tokio", feature = "rt-tokio-current-thread"))]
     use crate::trace::Tracer;
-    use std::{
-        fmt::Debug,
-        io::Write,
-        sync::Mutex,
-        thread::{self, sleep},
-        time::Duration,
-    };
+    use std::{fmt::Debug, io::Write, sync::Mutex};
 
     #[derive(Debug)]
     struct AssertWriter {
@@ -542,95 +546,6 @@ mod tests {
                 buf: self.buf.clone(),
             }
         }
-    }
-
-    #[derive(Debug, Default)]
-    struct TestTracerProvider {
-        _debug_msg: &'static str,
-    }
-
-    impl TestTracerProvider {
-        fn new(debug_msg: &'static str) -> Self {
-            TestTracerProvider {
-                _debug_msg: debug_msg,
-            }
-        }
-    }
-
-    impl TracerProvider for TestTracerProvider {
-        type Tracer = NoopTracer;
-
-        fn tracer(&self, _name: &'static str, _version: Option<&'static str>) -> Self::Tracer {
-            NoopTracer::default()
-        }
-
-        fn force_flush(&self) -> Vec<TraceResult<()>> {
-            Vec::new()
-        }
-    }
-
-    #[test]
-    #[ignore = "requires --test-threads=1"]
-    fn test_set_tracer_provider() {
-        let _ = set_tracer_provider(TestTracerProvider::new("global one"));
-
-        {
-            let _ = set_tracer_provider(TestTracerProvider::new("inner one"));
-            assert!(format!("{:?}", tracer_provider()).contains("inner one"));
-        }
-
-        assert!(format!("{:?}", tracer_provider()).contains("inner one"));
-    }
-
-    #[test]
-    #[ignore = "requires --test-threads=1"]
-    fn test_set_tracer_provider_in_another_thread() {
-        let _ = set_tracer_provider(TestTracerProvider::new("global one"));
-
-        let handle = thread::spawn(move || {
-            assert!(format!("{:?}", tracer_provider()).contains("global one"));
-        });
-
-        println!("{:?}", tracer_provider());
-
-        let _ = handle.join();
-    }
-
-    #[test]
-    #[ignore = "requires --test-threads=1"]
-    fn test_set_tracer_provider_in_another_function() {
-        let setup = || {
-            let _ = set_tracer_provider(TestTracerProvider::new("global one"));
-            assert!(format!("{:?}", tracer_provider()).contains("global one"))
-        };
-
-        setup();
-
-        assert!(format!("{:?}", tracer_provider()).contains("global one"))
-    }
-
-    #[test]
-    #[ignore = "requires --test-threads=1"]
-    fn test_set_two_provider_in_two_thread() {
-        let (sender, recv) = std::sync::mpsc::channel();
-        let (sender1, sender2) = (sender.clone(), sender);
-        let _handle1 = thread::spawn(move || {
-            sleep(Duration::from_secs(1));
-            let _previous = set_tracer_provider(TestTracerProvider::new("thread 1"));
-            sleep(Duration::from_secs(2));
-            let _ = sender1.send(format!("thread 1: {:?}", tracer_provider()));
-        });
-        let _handle2 = thread::spawn(move || {
-            sleep(Duration::from_secs(2));
-            let _previous = set_tracer_provider(TestTracerProvider::new("thread 2"));
-            sleep(Duration::from_secs(1));
-            let _ = sender2.send(format!("thread 2 :{:?}", tracer_provider()));
-        });
-
-        let first_resp = recv.recv().unwrap();
-        let second_resp = recv.recv().unwrap();
-        assert!(first_resp.contains("thread 2"));
-        assert!(second_resp.contains("thread 2"));
     }
 
     #[cfg(any(feature = "rt-tokio", feature = "rt-tokio-current-thread"))]
